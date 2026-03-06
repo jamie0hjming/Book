@@ -68,3 +68,157 @@ for i, g in enumerate(groups, 1):
         except StopIteration:
             break
     print()
+
+
+def parse_part(s):
+    """解析一段：支持 0..3 或 0..4,reserved:2"""
+    parts = s.split(',')
+    # 正常序号
+    s_range = parts[0]
+    start, end = map(int, s_range.split('..'))
+    seq = list(range(start, end + 1))
+    # 解析 reserved
+    for p in parts[1:]:
+        if p.startswith('reserved:'):
+            n = int(p.split(':')[1])
+            seq += ['reserved'] * n
+    return seq
+
+
+def flatten_indices(groups):
+    """
+    多层嵌套遍历，按顺序生成全局 index，只保留非 reserved
+    groups: 元组列表，如 ('0..3','0..4,reserved:2')
+    返回：所有有效序号
+    """
+    seqs = [parse_part(g) for g in groups]
+
+    valid = []
+    idx = 0
+
+    # 递归 N 层循环
+    def dfs(level, current):
+        nonlocal idx
+        if level == len(seqs):
+            # 所有维度都不是 reserved 才保留
+            if all(v != 'reserved' for v in current):
+                valid.append(idx)
+            idx += 1
+            return
+        for v in seqs[level]:
+            current.append(v)
+            dfs(level + 1, current)
+            current.pop()
+
+    dfs(0, [])
+    return valid
+
+
+def to_ranges(seq):
+    """把序号列表转成 0-4,7-11 格式"""
+    if not seq:
+        return []
+    ranges = []
+    begin = prev = seq[0]
+    for x in seq[1:]:
+        if x != prev + 1:
+            ranges.append(f"{begin}-{prev}" if begin != prev else f"{begin}")
+            begin = x
+        prev = x
+    ranges.append(f"{begin}-{prev}" if begin != prev else f"{begin}")
+    return ", ".join(ranges)
+
+
+# ======================
+# 这里随便改，支持 2/3/4 段
+# ======================
+if __name__ == '__main__':
+    # 示例 1：你原来的 2 段
+    group = ('0..3', '0..4,reserved:2')
+
+    # 示例 2：3段（随便测试）
+    # group = ('0..1', '0..1,reserved:1', '0..2')
+
+    # 示例 3：4段
+    # group = ('0..1', '0..1', '0..1,reserved:1', '0..1')
+
+    valid = flatten_indices(group)
+    print("有效区间:", to_ranges(valid))
+    print("有效总数:", len(valid))
+11111111111
+
+def parse_part(s):
+    """解析一段：支持 0..3 或 0..4,reserved:2"""
+    parts = s.split(',')
+    # 正常序号
+    s_range = parts[0]
+    start, end = map(int, s_range.split('..'))
+    seq = list(range(start, end + 1))
+    # 解析 reserved
+    for p in parts[1:]:
+        if p.startswith('reserved:'):
+            n = int(p.split(':')[1])
+            seq += ['reserved'] * n
+    return seq
+
+
+def flatten_indices(groups):
+    """
+    多层嵌套遍历，按顺序生成全局 index，只保留非 reserved
+    groups: 元组列表，如 ('0..3','0..4,reserved:2')
+    返回：所有有效序号
+    """
+    seqs = [parse_part(g) for g in groups]
+
+    valid = []
+    idx = 0
+
+    # 递归 N 层循环
+    def dfs(level, current):
+        nonlocal idx
+        if level == len(seqs):
+            # 所有维度都不是 reserved 才保留
+            if all(v != 'reserved' for v in current):
+                valid.append(idx)
+            idx += 1
+            return
+        for v in seqs[level]:
+            current.append(v)
+            dfs(level + 1, current)
+            current.pop()
+
+    dfs(0, [])
+    return valid
+
+
+def to_ranges(seq):
+    """把序号列表转成 0-4,7-11 格式"""
+    if not seq:
+        return []
+    ranges = []
+    begin = prev = seq[0]
+    for x in seq[1:]:
+        if x != prev + 1:
+            ranges.append(f"{begin}-{prev}" if begin != prev else f"{begin}")
+            begin = x
+        prev = x
+    ranges.append(f"{begin}-{prev}" if begin != prev else f"{begin}")
+    return ", ".join(ranges)
+
+
+# ======================
+# 这里随便改，支持 2/3/4 段
+# ======================
+if __name__ == '__main__':
+    # 示例 1：你原来的 2 段
+    group = ('0..3', '0..4,reserved:2')
+
+    # 示例 2：3段（随便测试）
+    # group = ('0..1', '0..1,reserved:1', '0..2')
+
+    # 示例 3：4段
+    # group = ('0..1', '0..1', '0..1,reserved:1', '0..1')
+
+    valid = flatten_indices(group)
+    print("有效区间:", to_ranges(valid))
+    print("有效总数:", len(valid))

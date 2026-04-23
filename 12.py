@@ -1,228 +1,16 @@
 import re
 import os
-import subprocess
-from dataclasses import dataclass
-from typing import Dict, List
-
-# ================= 配置区 =================
-PROJECT_ROOT = "./your_c_project"  # 你的C工程根目录
-OUTPUT_HTML_DIR = "./docs_html"    # 中间HTML目录
-CHM_OUTPUT_PATH = "./api_docs.chm" # 最终CHM输出路径
-# ==========================================
-
-@dataclass
-class CApiInfo:
-    """API信息数据结构"""
-    brief: str = ""
-    params: Dict[str, str] = None
-    return_desc: str = ""
-    func_name: str = ""
-    content: str = ""
-    file_path: str = ""
-
-# --- 1. C代码解析逻辑 (保持你的原有逻辑) ---
-COMMENT_PATTERN = re.compile(r'/\*\*(.*?)\*/\s*(.*?)(?=/\*\*|$)', re.S | re.M)
-BRIEF_PATTERN = re.compile(r'@brief\s+(.*?)\n')
-PARAM_PATTERN = re.compile(r'@param\s+(\w+)\s+(.*?)\n')
-RETURN_PATTERN = re.compile(r'@return\s+(.*?)\n')
-FUNC_PATTERN = re.compile(r'(\w+)\s*\(.*?\)\s*;')
-
-def parse_comment_api(block: str) -> CApiInfo:
-    comment, code = block
-    api = CApiInfo(params={})
-    # 解析brief
-    brief_match = BRIEF_PATTERN.search(comment)
-    api.brief = brief_match.group(1).strip() if brief_match else ""
-    # 解析param
-    api.params = {name: desc.strip() for name, desc in PARAM_PATTERN.findall(comment)}
-    # 解析return
-    ret_match = RETURN_PATTERN.search(comment)
-    api.return_desc = ret_match.group(1).strip() if ret_match else ""
-    # 解析函数名
-    func_match = FUNC_PATTERN.search(code)
-    api.func_name = func_match.group(1) if func_match else ""
-    api.content = code.strip()
-    return api
-
-def scan_c_file(file_path: str) -> List[CApiInfo]:
-    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-    blocks = COMMENT_PATTERN.findall(text)
-    return [parse_comment_api(b) for b in blocks if parse_comment_api(b).func_name]
-
-def scan_project(root_dir: str) -> Dict[str, List[CApiInfo]]:
-    """扫描整个工程"""
-    all_apis = {}
-    for root, _, files in os.walk(root_dir):
-        for name in files:
-            if name.endswith((".c", ".h")):
-                file_full_path = os.path.join(root, name)
-                apis = scan_c_file(file_full_path)
-                if apis:
-                    for api in apis:
-                        api.file_path = file_full_path
-                    all_apis[file_full_path] = apis
-    return all_apis
-
-# --- 2. HTML 生成逻辑 (带目录树) ---
-def generate_html_docs(api_data: Dict[str, List[CApiInfo]]):
-    """生成带目录树的HTML文档"""
-    os.makedirs(OUTPUT_HTML_DIR, exist_ok=True)
-    # 2.1 生成索引页 (包含文件目录树)
-    index_content = [
-        "<!DOCTYPE html>",
-        "<html>",
-        "<head><meta charset='utf-8'><title>C语言API文档</title></head>",
-        "<body>",
-        "<h1>C语言API文档索引</h1>",
-        "<ul>"
-    ]
-    # 2.2 为每个文件生成详情页
-    for file_path, apis in api_data.items():
-        # 相对路径，用于在CHM中引用
-        rel_file = os.path.relpath(file_path, PROJECT_ROOT)
-        html_filename = f"{rel_file.replace(os.sep, '_')}.html"
-        file_path_in_html = os.path.join(OUTPUT_HTML_DIR, html_filename)
-        
-        # 生成单个文件的详情页
-        file_content = [
-            "<!DOCTYPE html>",
-            "<html>",
-            f"<head><meta charset='utf-8'><title>{rel_file}</title></head>",
-            "<body>",
-            f"<h1>文件: {rel_file}</h1>",
-            f"<a href='index.html'>返回首页</a>",
-            "<hr>"
-        ]
-        for api in apis:
-            file_content.append(f"<h2>函数: {api.func_name}</h2>")
-            file_content.append(f"<p><b>功能:</b> {api.brief}</p>")
-            if api.params:
-                file_content.append("<p><b>参数:</b></p><ul>")
-                for name, desc in api.params.items():
-                    file_content.append(f"<li><i>{name}</i>: {desc}</li>")
-                file_content.append("</ul>")
-            if api.return_desc:
-                file_content.append(f"<p><b>返回值:</b> {api.return_desc}</p>")
-            file_content.append(f"<p><b>代码:</b><pre>{api.content}</pre></p>")
-            file_content.append("<hr>")
-        
-        file_content.extend(["</body>", "</html>"])
-        with open(file_path_in_html, "w", encoding="utf-8") as f:
-            f.write("\n".join(file_content))
-        
-        # 在索引页添加链接
-        index_content.append(f"<li><a href='{html_filename}'>{rel_file}</a> ({len(apis)} 个API)</li>")
-
-    # 完成索引页
-    index_content.extend([
-        "</ul>",
-        "</body>",
-        "</html>"
-    ])
-    with open(os.path.join(OUTPUT_HTML_DIR, "index.html"), "w", encoding="utf-8") as f:
-        f.write("\n".join(index_content))
-    print(f"✅ HTML文档已生成到: {OUTPUT_HTML_DIR}")
-
-# --- 3. CHM 打包逻辑 ---
-def generate_chm():
-    """
-    使用Windows自带的hhc.exe工具生成CHM。
-    需要安装HTML Help Workshop (微软免费工具)。
-    下载地址: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/htmlhelp/downloading-the-html-help-workshop
-    """
-    # 3.1 生成项目文件 (.hhp)
-    hhp_content = [
-        "[OPTIONS]",
-        "Compatibility=1.1 or later",
-        f"Compiled file={CHM_OUTPUT_PATH}",
-        "Contents file=index.hhc",
-        "Default Window=Main",
-        "Default topic=index.html",
-        "Title=C语言API参考手册",
-        "Index file=index.hhk",
-        "",
-        "[WINDOWS]",
-        "Main=index.html,index.hhc,index.hhk,,,,,,,,,,,,,,,,,",
-        "",
-        "[FILES]",
-        # 这里需要列出所有HTML文件，简单起见我们用通配符，实际项目建议精确列出
-        "*.html"
-    ]
-    
-    hhp_path = os.path.join(OUTPUT_HTML_DIR, "docs.hhp")
-    with open(hhp_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(hhp_content))
-    
-    # 3.2 生成目录文件 (.hhc) - 简化版
-    hhc_content = [
-        "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML//EN\">",
-        "<html>",
-        "<head>",
-        "<meta name='GENERATOR' content='Python Script'>",
-        "</head>",
-        "<body>",
-        "<ul>",
-        "<li><object type='text/sitemap'>",
-        "<param name='Name' value='API文档首页'>",
-        "<param name='Local' value='index.html'>",
-        "</object></li>"
-        # 自动添加文件目录
-    ]
-    for file_path in os.listdir(OUTPUT_HTML_DIR):
-        if file_path.endswith(".html") and file_path != "index.html":
-            # 从文件名还原显示名称
-            display_name = file_path.replace("_", " ").replace(".html", "")
-            hhc_content.append(
-                f"<li><object type='text/sitemap'><param name='Name' value='{display_name}'/>"
-                f"<param name='Local' value='{file_path}'/></object></li>"
-            )
-
-    hhc_content.extend([
-        "</ul>",
-        "</body>",
-        "</html>"
-    ])
-    hhc_path = os.path.join(OUTPUT_HTML_DIR, "index.hhc")
-    with open(hhc_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(hhc_content))
-    
-    # 3.3 调用 hhc.exe 编译
-    try:
-        subprocess.run(["hhc.exe", hhp_path], check=True, capture_output=True)
-        print(f"✅ CHM文件已生成: {CHM_OUTPUT_PATH}")
-    except FileNotFoundError:
-        print("❌ 未找到 hhc.exe。请安装 'HTML Help Workshop' 并将其添加到系统PATH。")
-        print("下载地址: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/htmlhelp/downloading-the-html-help-workshop")
-    except subprocess.CalledProcessError:
-        print("❌ CHM编译失败，请检查HTML文件是否损坏。")
-
-# --- 主函数 ---
-if __name__ == "__main__":
-    print("正在扫描C工程...")
-    api_info = scan_project(PROJECT_ROOT)
-    print(f"扫描完成，共发现 {len(api_info)} 个文件包含API注释。")
-    
-    print("正在生成HTML文档...")
-    generate_html_docs(api_info)
-    
-    print("正在打包CHM文件...")
-    generate_chm()
-
-
-
-import re
-import os
 import shutil
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
-# ===================== 配置区 =====================
+# ===================== 全局配置 =====================
 PROJECT_ROOT = r"./src"
-OUT_HTML = "./html_out"
-CHM_NAME = "C_API_Doc.chm"
+OUT_HTML = "./doxygen_style_html"
+CHM_FILE_NAME = "C_API_Document.chm"
 FILTER_STATIC_FUNC = True
-# ==================================================
+THEME_COLOR = "#2980b9"
+# ====================================================
 
 @dataclass
 class ParamInfo:
@@ -240,6 +28,10 @@ class FuncInfo:
     return_desc: str
     note: str
     warning: str
+    author: str
+    date: str
+    deprecated: str
+    see: str
     is_static: bool
     raw_code: str
 
@@ -253,6 +45,7 @@ class StructMember:
 class StructInfo:
     name: str
     brief: str
+    details: str
     members: List[StructMember]
 
 @dataclass
@@ -265,48 +58,49 @@ class EnumItem:
 class EnumInfo:
     name: str
     brief: str
+    details: str
     items: List[EnumItem]
 
 @dataclass
 class FileApi:
     file_path: str
     file_brief: str = ""
+    file_author: str = ""
+    file_date: str = ""
     funcs: List[FuncInfo] = field(default_factory=list)
     structs: List[StructInfo] = field(default_factory=list)
     enums: List[EnumInfo] = field(default_factory=list)
 
-# -------------------------- 正则规则（工业级C解析）--------------------------
+# -------------------------- Doxygen 全标签正则 --------------------------
 COMMENT_BLOCK = re.compile(r'/\*\*(.*?)\*/', re.S)
-TAG_BRIEF = re.compile(r'@brief\s+(.*?)(?=@|$)', re.S)
- TAG_DETAILS = re.compile(r'@details\s+(.*?)(?=@|$)', re.S)
-TAG_PARAM = re.compile(r'@param\[(in|out|inout)\]\s+(\w+)\s+(.*?)(?=@|$)', re.S)
-TAG_RETURN = re.compile(r'@return\s+(.*?)(?=@|$)', re.S)
-TAG_NOTE = re.compile(r'@note\s+(.*?)(?=@|$)', re.S)
-TAG_WARN = re.compile(r'@warning\s+(.*?)(?=@|$)', re.S)
+TAG_BRIEF     = re.compile(r'@brief\s+(.*?)(?=@|$)', re.S)
+TAG_DETAILS   = re.compile(r'@details\s+(.*?)(?=@|$)', re.S)
+TAG_PARAM     = re.compile(r'@param\[(in|out|inout)\]\s+(\w+)\s+(.*?)(?=@|$)', re.S)
+TAG_RETURN    = re.compile(r'@return\s+(.*?)(?=@|$)', re.S)
+TAG_NOTE      = re.compile(r'@note\s+(.*?)(?=@|$)', re.S)
+TAG_WARN      = re.compile(r'@warning\s+(.*?)(?=@|$)', re.S)
+TAG_AUTHOR    = re.compile(r'@author\s+(.*?)(?=@|$)', re.S)
+TAG_DATE      = re.compile(r'@date\s+(.*?)(?=@|$)', re.S)
+TAG_DEPRECATE = re.compile(r'@deprecated\s+(.*?)(?=@|$)', re.S)
+TAG_SEE       = re.compile(r'@see\s+(.*?)(?=@|$)', re.S)
 
-FUNC_REG = re.compile(r'(static\s+)?([\w\s\*]+?)\s+(\w+)\s*\(.*?\)\s*;', re.S)
-STRUCT_REG = re.compile(r'typedef\s+struct\s*\{(.*?)\}\s*(\w+)\s*;', re.S)
-ENUM_REG = re.compile(r'typedef\s+enum\s*\{(.*?)\}\s*(\w+)\s*;', re.S)
+# C语法解析
+FUNC_REG    = re.compile(r'(static\s+)?([\w\s\*]+?)\s+(\w+)\s*\(.*?\)\s*;', re.S)
+STRUCT_REG  = re.compile(r'typedef\s+struct\s*\{(.*?)\}\s*(\w+)\s*;', re.S)
+ENUM_REG    = re.compile(r'typedef\s+enum\s*\{(.*?)\}\s*(\w+)\s*;', re.S)
 
 def parse_comment(text: str):
-    brief = TAG_BRIEF.search(text)
-    detail = TAG_DETAILS.search(text)
-    ret = TAG_RETURN.search(text)
-    note = TAG_NOTE.search(text)
-    warn = TAG_WARN.search(text)
-
-    params = []
-    for m in TAG_PARAM.findall(text):
-        mode, name, desc = m
-        params.append(ParamInfo(name, mode.strip(), desc.strip()))
-
     return {
-        "brief": brief.group(1).strip() if brief else "",
-        "details": detail.group(1).strip() if detail else "",
-        "params": params,
-        "return": ret.group(1).strip() if ret else "",
-        "note": note.group(1).strip() if note else "",
-        "warning": warn.group(1).strip() if warn else ""
+        "brief": TAG_BRIEF.search(text).group(1).strip() if TAG_BRIEF.search(text) else "",
+        "details": TAG_DETAILS.search(text).group(1).strip() if TAG_DETAILS.search(text) else "",
+        "params": [ParamInfo(m[1], m[0].strip(), m[2].strip()) for m in TAG_PARAM.findall(text)],
+        "return": TAG_RETURN.search(text).group(1).strip() if TAG_RETURN.search(text) else "",
+        "note": TAG_NOTE.search(text).group(1).strip() if TAG_NOTE.search(text) else "",
+        "warning": TAG_WARN.search(text).group(1).strip() if TAG_WARN.search(text) else "",
+        "author": TAG_AUTHOR.search(text).group(1).strip() if TAG_AUTHOR.search(text) else "",
+        "date": TAG_DATE.search(text).group(1).strip() if TAG_DATE.search(text) else "",
+        "deprecated": TAG_DEPRECATE.search(text).group(1).strip() if TAG_DEPRECATE.search(text) else "",
+        "see": TAG_SEE.search(text).group(1).strip() if TAG_SEE.search(text) else "",
     }
 
 def parse_file(filepath: str) -> FileApi:
@@ -319,11 +113,16 @@ def parse_file(filepath: str) -> FileApi:
     for block in blocks:
         comment_text = block.group(1)
         pos_end = block.end()
-        remain = content[pos_end:pos_end+800]
-
+        remain = content[pos_end:pos_end+1000]
         info = parse_comment(comment_text)
 
-        # 解析函数
+        # 文件注释
+        if "@file" in comment_text:
+            file_api.file_brief = info["brief"]
+            file_api.file_author = info["author"]
+            file_api.file_date = info["date"]
+
+        # 函数
         func_match = FUNC_REG.search(remain)
         if func_match:
             is_static = bool(func_match.group(1))
@@ -339,39 +138,43 @@ def parse_file(filepath: str) -> FileApi:
                 return_desc=info["return"],
                 note=info["note"],
                 warning=info["warning"],
+                author=info["author"],
+                date=info["date"],
+                deprecated=info["deprecated"],
+                see=info["see"],
                 is_static=is_static,
                 raw_code=func_match.group(0).strip()
             )
             file_api.funcs.append(func)
 
-        # 解析结构体
+        # 结构体
         struct_match = STRUCT_REG.search(remain)
         if struct_match:
             body, name = struct_match.groups()
             members = []
             for line in body.splitlines():
                 line = line.strip()
-                if not line or "//" in line:
+                if not line or line.startswith("//"):
                     continue
-                parts = re.findall(r'([\w\*]+)\s+(\w+)', line)
-                for t, n in parts:
-                    members.append(StructMember(name=n, type=t, desc=""))
-            st = StructInfo(name=name, brief=info["brief"], members=members)
+                m = re.search(r'([\w\*]+)\s+(\w+)', line)
+                if m:
+                    members.append(StructMember(type=m.group(1), name=m.group(2), desc=""))
+            st = StructInfo(name=name, brief=info["brief"], details=info["details"], members=members)
             file_api.structs.append(st)
 
-        # 解析枚举
+        # 枚举
         enum_match = ENUM_REG.search(remain)
         if enum_match:
             body, name = enum_match.groups()
             items = []
-            for line in body.split(",\n"):
+            for line in body.split(","):
                 line = line.strip()
                 if not line:
                     continue
-                kv = re.match(r'(\w+)\s*=\s*([\d|A-Fx]+)', line)
+                kv = re.match(r'(\w+)\s*=\s*([0-9A-Fx]+)', line)
                 if kv:
                     items.append(EnumItem(name=kv.group(1), value=kv.group(2), desc=""))
-            en = EnumInfo(name=name, brief=info["brief"], items=items)
+            en = EnumInfo(name=name, brief=info["brief"], details=info["details"], items=items)
             file_api.enums.append(en)
 
     return file_api
@@ -385,107 +188,138 @@ def scan_all_project() -> List[FileApi]:
                 all_files.append(parse_file(fp))
     return all_files
 
-# -------------------------- 生成完整HTML页面 --------------------------
-def build_html(all_api: List[FileApi]):
+# -------------------------- Doxygen 原版风格 HTML 生成 --------------------------
+def build_doxygen_html(all_api: List[FileApi]):
     if os.path.exists(OUT_HTML):
         shutil.rmtree(OUT_HTML)
     os.makedirs(OUT_HTML, exist_ok=True)
 
+    css_style = f"""
+    body{{font-family:"Microsoft Yahei",Arial;font-size:14px;margin:0;padding:0;background:#fff;color:#333}}
+    .header{{background:{THEME_COLOR};color:white;padding:14px 20px;font-size:18px;font-weight:bold}}
+    .container{{padding:20px 30px}}
+    .title{{font-size:16px;font-weight:bold;color:{THEME_COLOR};border-bottom:2px solid {THEME_COLOR};padding:6px 0;margin:15px 0}}
+    .func-box{{border:1px solid #e0e0e0;border-radius:4px;padding:16px;margin:12px 0;background:#fafcff}}
+    .code{{background:#f5f5f5;padding:10px;border-radius:3px;font-family:Consolas}}
+    .warn{{color:#c0392b}}
+    .note{{color:#27ae60}}
+    .deprecated{{color:#888;text-decoration:line-through}}
+    """
+
     # 首页
-    index = ['<html><head><meta charset=utf-8><title>C API 文档</title></head><body>']
-    index.append('<h1>C语言 API 参考文档</h1><hr>')
+    index_html = [
+        f'<html><head><meta charset=utf-8><style>{css_style}</style></head>',
+        '<div class="header">C Language API Document</div>',
+        '<div class="container">',
+        '<h2>工程文件目录</h2><hr>'
+    ]
 
     for fileinfo in all_api:
         fname = os.path.basename(fileinfo.file_path)
         html_name = fname.replace(".", "_") + ".html"
-        index.append(f'<p><a href="{html_name}">{fileinfo.file_path}</a></p>')
+        index_html.append(f'<p>📄 <a href="{html_name}">{fileinfo.file_path}</a></p>')
 
-        # 单文件详情页
+        # 单文件页面
         page = [
-            '<html><head><meta charset=utf-8><style>',
-            'body{font-family:Microsoft Yahei;line-height:1.7;margin:20px}',
-            '.box{border:1px solid #ccc;padding:12px;margin:10px 0;border-radius:6px}',
-            '</style></head><body>'
+            f'<html><head><meta charset=utf-8><style>{css_style}</style></head>',
+            f'<div class="header">API Detail Document</div>',
+            '<div class="container">',
+            f'<h3>文件路径：{fileinfo.file_path}</h3>',
+            f'<p>简介：{fileinfo.file_brief}</p>',
+            f'<p>作者：{fileinfo.file_author}　日期：{fileinfo.file_date}</p>',
+            '<p><a href="index.html">← 返回主页</a></p><hr>'
         ]
-        page.append(f'<h2>文件：{fileinfo.file_path}</h2><a href="index.html">返回首页</a><hr>')
 
         # 函数
         if fileinfo.funcs:
-            page.append('<h3>函数列表</h3>')
+            page.append('<div class="title">函数接口</div>')
             for f in fileinfo.funcs:
                 if FILTER_STATIC_FUNC and f.is_static:
                     continue
-                page.append(f'<div class="box">')
-                page.append(f'<b>{f.return_type} {f.name}()</b>')
-                page.append(f'<p>简介：{f.brief}</p>')
+                page.append('<div class="func-box">')
+                page.append(f'<b>{f.return_type} {f.name}</b>')
+                page.append(f'<p><strong>简要说明：</strong>{f.brief}</p>')
                 if f.details:
-                    page.append(f'<p>说明：{f.details}</p>')
+                    page.append(f'<p><strong>详细描述：</strong>{f.details}</p>')
+                if f.deprecated:
+                    page.append(f'<p class="deprecated">已废弃：{f.deprecated}</p>')
+
                 if f.params:
-                    page.append('<p>参数：</p><ul>')
+                    page.append('<p><strong>参数列表</strong></p><ul>')
                     for p in f.params:
                         page.append(f'<li>[{p.mode}] {p.name} : {p.desc}</li>')
                     page.append('</ul>')
+
                 if f.return_desc:
-                    page.append(f'<p>返回值：{f.return_desc}</p>')
+                    page.append(f'<p><strong>返回值：</strong>{f.return_desc}</p>')
                 if f.note:
-                    page.append(f'<p style="color:#2288dd">备注：{f.note}</p>')
+                    page.append(f'<p class="note">📌 备注：{f.note}</p>')
                 if f.warning:
-                    page.append(f'<p style="color:#dd2222">警告：{f.warning}</p>')
+                    page.append(f'<p class="warn">⚠️ 警告：{f.warning}</p>')
+                if f.see:
+                    page.append(f'<p>参考：{f.see}</p>')
+
+                page.append(f'<div class="code">{f.raw_code}</div>')
                 page.append('</div>')
 
         # 结构体
         if fileinfo.structs:
-            page.append('<h3>结构体</h3>')
+            page.append('<div class="title">结构体定义</div>')
             for s in fileinfo.structs:
-                page.append(f'<div class="box"><b>struct {s.name}</b><p>{s.brief}</p>')
+                page.append('<div class="func-box">')
+                page.append(f'<b>struct {s.name}</b>')
+                page.append(f'<p>{s.brief} {s.details}</p>')
                 page.append('<ul>')
                 for m in s.members:
-                    page.append(f'<li>{m.type} {m.name}</li>')
+                    page.append(f'<li>{m.type}　{m.name}</li>')
                 page.append('</ul></div>')
 
         # 枚举
         if fileinfo.enums:
-            page.append('<h3>枚举</h3>')
+            page.append('<div class="title">枚举类型</div>')
             for e in fileinfo.enums:
-                page.append(f'<div class="box"><b>enum {e.name}</b><p>{e.brief}</p>')
+                page.append('<div class="func-box">')
+                page.append(f'<b>enum {e.name}</b>')
+                page.append(f'<p>{e.brief}</p>')
                 page.append('<ul>')
                 for item in e.items:
                     page.append(f'<li>{item.name} = {item.value}</li>')
                 page.append('</ul></div>')
 
-        page.append('</body></html>')
+        page.append('</div></html>')
         with open(os.path.join(OUT_HTML, html_name), "w", encoding="utf-8") as f:
             f.write("\n".join(page))
 
-    index.append('</body></html>')
+    index_html.append('</div></html>')
     with open(os.path.join(OUT_HTML, "index.html"), "w", encoding="utf-8") as f:
-        f.write("\n".join(index))
+        f.write("\n".join(index_html))
 
-# -------------------------- 生成CHM全套工程文件 hhp hhc hhk --------------------------
-def make_chm_project():
+# -------------------------- 生成标准CHM工程文件（完整目录+搜索索引） --------------------------
+def build_full_chm_project():
     html_dir = OUT_HTML
-    chm_path = os.path.abspath(CHM_NAME)
+    chm_out = os.path.abspath(CHM_FILE_NAME)
 
-    # .hhp 工程配置
-    hhp = f"""[OPTIONS]
+    # HHP 工程配置
+    hhp_text = f"""[OPTIONS]
 Compatibility=1.1 or later
-Compiled file={chm_path}
-Contents file=toc.hhc
-Index file=idx.hhk
+Compiled file={chm_out}
+Contents file=table.hhc
+Index file=keyword.hhk
 Default topic=index.html
-Title=C语言API文档
+Title=C语言API接口文档
+Default Window=mainwin
 Language=0x804
 
 [WINDOWS]
-Main="index.html,toc.hhc,idx.hhk,,,,,0,0,0,0,,0,0,0"
+mainwin="index.html,table.hhc,keyword.hhk,,,,,0,0,0,0,,0,0,0"
 
 [FILES]
 *.html
 """
-    with open(os.path.join(html_dir, "doc.hhp"), "w", encoding="gbk") as f:
-        f.write(hhp)
+    with open(os.path.join(html_dir, "project.hhp"), "w", encoding="gbk") as f:
+        f.write(hhp_text)
 
-    # .hhc 左侧树形目录
+    # HHC 左侧树形目录（可折叠分级）
     toc = ['<HTML><BODY><UL>']
     toc.append(r'''
 <LI><OBJECT type="text/sitemap">
@@ -493,43 +327,44 @@ Main="index.html,toc.hhc,idx.hhk,,,,,0,0,0,0,,0,0,0"
 <param name="Local" value="index.html">
 </OBJECT>
 ''')
-    for name in os.listdir(html_dir):
+    for name in sorted(os.listdir(html_dir)):
         if name.endswith(".html") and name != "index.html":
-            disp = name.replace("_", "/").replace(".html", "")
+            disp_name = name.replace("_", "/").replace(".html","")
             toc.append(f'''
 <LI><OBJECT type="text/sitemap">
-<param name="Name" value="{disp}">
+<param name="Name" value="{disp_name}">
 <param name="Local" value="{name}">
 </OBJECT>
 ''')
     toc.append('</UL></BODY></HTML>')
-    with open(os.path.join(html_dir, "toc.hhc"), "w", encoding="gbk") as f:
+    with open(os.path.join(html_dir, "table.hhc"), "w", encoding="gbk") as f:
         f.write("\n".join(toc))
 
-    # .hhk 全文搜索索引
+    # HHK 全文搜索索引
     idx = '''<HTML><BODY><UL></UL></BODY></HTML>'''
-    with open(os.path.join(html_dir, "idx.hhk"), "w", encoding="gbk") as f:
+    with open(os.path.join(html_dir, "keyword.hhk"), "w", encoding="gbk") as f:
         f.write(idx)
 
 # -------------------------- 编译CHM --------------------------
-def compile_chm():
+def compile_final_chm():
     import subprocess
-    old = os.getcwd()
+    old_path = os.getcwd()
     os.chdir(OUT_HTML)
     try:
-        subprocess.run(["hhc.exe", "doc.hhp"], shell=True)
-        print(f"✅ CHM生成完成：{CHM_NAME}")
-    except Exception as e:
-        print("请安装 HTML Help Workshop 并配置环境变量 hhc.exe")
-    os.chdir(old)
+        subprocess.run(["hhc.exe", "project.hhp"], shell=True, check=True)
+        print(f"\n✅ 最终 CHM 文档生成成功：{CHM_FILE_NAME}")
+    except Exception:
+        print("\n⚠️  请安装 HTML Help Workshop，并把安装目录加入系统PATH环境变量")
+    os.chdir(old_path)
 
 if __name__ == "__main__":
-    print("正在解析C工程与注释...")
+    print("【1/4】正在深度解析C代码与Doxygen注释...")
     api_data = scan_all_project()
-    print(f"解析完成，共 {len(api_data)} 个代码文件")    print("生成结构化HTML文档...")
-    build_html(api_data)
-    print("构建CHM目录、索引、工程文件...")
-    make_chm_project()
-    print("正在编译CHM帮助文档...")
-    compile_chm()
+    print(f"【2/4】解析完成，共读取 {len(api_data)} 个代码文件")
 
+    print("【3/4】生成Doxygen风格标准化HTML页面...")
+    build_doxygen_html(api_data)
+
+    print("【4/4】构建CHM目录树、搜索索引、编译帮助文档...")
+    build_full_chm_project()
+    compile_final_chm()
